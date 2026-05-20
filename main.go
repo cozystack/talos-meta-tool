@@ -129,7 +129,7 @@ func (a *ADV) marshal() ([]byte, error) {
 }
 
 // WriteToDisk writes ADV data to disk
-func (a *ADV) WriteToDisk(devicePath string) error {
+func (a *ADV) WriteToDisk(devicePath string) (err error) {
 	serialized, err := a.marshal()
 	if err != nil {
 		return err
@@ -139,7 +139,11 @@ func (a *ADV) WriteToDisk(devicePath string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	if _, err := f.WriteAt(serialized, 0); err != nil {
 		return err
@@ -185,7 +189,9 @@ func main() {
 	var adv *ADV
 	f, err := os.Open(*devicePath)
 	if err == nil {
-		defer f.Close()
+		defer func() {
+			_ = f.Close()
+		}()
 		adv, err = NewADV(f)
 		if err != nil {
 			log.Fatalf("Error loading ADV: %v", err)
