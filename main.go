@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"sync"
@@ -142,18 +141,15 @@ func (a *ADV) WriteToDisk(devicePath string) error {
 	}
 	defer f.Close()
 
-	_, err = f.WriteAt(serialized, 0)
-	if err != nil {
+	if _, err := f.WriteAt(serialized, 0); err != nil {
 		return err
 	}
 
-	_, err = f.Seek(0, io.SeekStart)
-	if err != nil {
+	if _, err := f.WriteAt(serialized, Length); err != nil {
 		return err
 	}
 
-	_, err = f.WriteAt(serialized, Length)
-	return err
+	return nil
 }
 
 func main() {
@@ -168,7 +164,7 @@ func main() {
 	}
 
 	// Reading configuration from file
-	configData, err := ioutil.ReadFile(*configPath)
+	configData, err := os.ReadFile(*configPath)
 	if err != nil {
 		log.Fatalf("Error reading configuration file: %v", err)
 	}
