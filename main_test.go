@@ -76,13 +76,24 @@ func TestSetTagBytes(t *testing.T) {
 	}
 }
 
-func TestSetTagBytesOverflow(t *testing.T) {
-	adv := &ADV{Tags: make(map[uint8][]byte)}
+func TestSetTagBytesBoundary(t *testing.T) {
+	// SetTagBytes reserves 20 bytes of overhead in addition to the value,
+	// so the largest accepted value on an empty ADV is DataLength-20.
+	const maxAccepted = DataLength - 20
 
-	oversized := make([]byte, DataLength+1)
-	if adv.SetTagBytes(FixedTag, oversized) {
-		t.Fatal("SetTagBytes should return false for oversized value")
-	}
+	t.Run("largest accepted", func(t *testing.T) {
+		adv := &ADV{Tags: make(map[uint8][]byte)}
+		if !adv.SetTagBytes(FixedTag, make([]byte, maxAccepted)) {
+			t.Fatalf("SetTagBytes rejected the maximum accepted size %d", maxAccepted)
+		}
+	})
+
+	t.Run("smallest rejected", func(t *testing.T) {
+		adv := &ADV{Tags: make(map[uint8][]byte)}
+		if adv.SetTagBytes(FixedTag, make([]byte, maxAccepted+1)) {
+			t.Fatalf("SetTagBytes accepted size %d which exceeds the limit", maxAccepted+1)
+		}
+	})
 }
 
 func TestMarshalMagicBytes(t *testing.T) {
