@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"os"
 	"testing"
@@ -15,7 +16,15 @@ func newTestFile(t *testing.T) *os.File {
 		t.Fatal(err)
 	}
 
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close temp file: %v", err)
+		}
+
+		if err := os.Remove(f.Name()); err != nil && !os.IsNotExist(err) {
+			t.Errorf("remove temp file: %v", err)
+		}
+	})
 
 	if err := f.Truncate(2 * Length); err != nil {
 		t.Fatal(err)
@@ -37,7 +46,6 @@ func TestNewADVNilReader(t *testing.T) {
 
 func TestNewADVEmptyFile(t *testing.T) {
 	f := newTestFile(t)
-	defer f.Close()
 
 	// A zeroed file has no valid magic — NewADV should return an empty ADV, not an error.
 	adv, err := NewADV(f)
@@ -101,7 +109,6 @@ func TestMarshalMagicBytes(t *testing.T) {
 
 func TestWriteToDiskWritesBothCopies(t *testing.T) {
 	f := newTestFile(t)
-	defer f.Close()
 
 	adv := &ADV{Tags: make(map[uint8][]byte)}
 	adv.SetTagBytes(FixedTag, []byte("test"))
@@ -110,23 +117,22 @@ func TestWriteToDiskWritesBothCopies(t *testing.T) {
 		t.Fatalf("WriteToDisk: %v", err)
 	}
 
-	magic := make([]byte, 4)
+	buf1 := make([]byte, Length)
+	buf2 := make([]byte, Length)
 
-	// first copy at offset 0
-	if _, err := f.ReadAt(magic, 0); err != nil {
+	if _, err := f.ReadAt(buf1, 0); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := binary.BigEndian.Uint32(magic); got != Magic1 {
-		t.Fatalf("first copy Magic1: got %#x, want %#x", got, Magic1)
-	}
-
-	// second copy at offset Length
-	if _, err := f.ReadAt(magic, Length); err != nil {
+	if _, err := f.ReadAt(buf2, Length); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := binary.BigEndian.Uint32(magic); got != Magic1 {
-		t.Fatalf("second copy Magic1: got %#x, want %#x", got, Magic1)
+	if !bytes.Equal(buf1, buf2) {
+		t.Error("second copy does not match first copy")
+	}
+
+	if got := binary.BigEndian.Uint32(buf1[:4]); got != Magic1 {
+		t.Fatalf("Magic1: got %#x, want %#x", got, Magic1)
 	}
 }
