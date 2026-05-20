@@ -12,5 +12,5 @@ GOOS=linux GOARCH=amd64 go build -o talos-meta-tool main.go
 
 Usage:
 ```
-/talos-meta-tool -config config.yaml -drive /dev/sda4
+/talos-meta-tool -config config.yaml -device /dev/sda4
 ```
