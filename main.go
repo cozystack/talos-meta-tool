@@ -64,7 +64,7 @@ func (a *ADV) unmarshal(buf []byte) error {
 		return fmt.Errorf("adv: incorrect magic2 value: %x", magic2)
 	}
 
-	checksum := buf[len(buf)-36 : len(buf)-4]
+	checksum := append([]byte(nil), buf[len(buf)-36:len(buf)-4]...)
 	copy(buf[len(buf)-36:len(buf)-4], make([]byte, 32))
 
 	hash := sha256.Sum256(buf)
@@ -75,8 +75,11 @@ func (a *ADV) unmarshal(buf []byte) error {
 	data := buf[4 : len(buf)-36]
 	for len(data) >= 8 {
 		tag := data[0]
-		size := binary.BigEndian.Uint32(data[4:8])
+		if tag == 0 {
+			break
+		}
 
+		size := binary.BigEndian.Uint32(data[4:8])
 		if len(data) < int(size)+8 {
 			return fmt.Errorf("adv: value exceeds buffer limits")
 		}
@@ -115,7 +118,7 @@ func (a *ADV) marshal() ([]byte, error) {
 
 	data := buf[4 : len(buf)-36]
 	for tag, value := range a.Tags {
-		binary.BigEndian.PutUint32(data[0:4], uint32(tag))
+		data[0] = tag
 		binary.BigEndian.PutUint32(data[4:8], uint32(len(value)))
 		copy(data[8:8+len(value)], value)
 		data = data[8+len(value):]

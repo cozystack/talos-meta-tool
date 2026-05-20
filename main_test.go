@@ -107,6 +107,100 @@ func TestMarshalMagicBytes(t *testing.T) {
 	}
 }
 
+func TestRoundTripEmpty(t *testing.T) {
+	original := &ADV{Tags: make(map[uint8][]byte)}
+
+	buf, err := original.marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	loaded := &ADV{Tags: make(map[uint8][]byte)}
+	if err := loaded.unmarshal(buf); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if len(loaded.Tags) != 0 {
+		t.Fatalf("expected empty Tags after round-trip, got %d entries", len(loaded.Tags))
+	}
+}
+
+func TestRoundTripWithTags(t *testing.T) {
+	original := &ADV{Tags: make(map[uint8][]byte)}
+	original.SetTagBytes(FixedTag, []byte("hello world"))
+
+	buf, err := original.marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	loaded := &ADV{Tags: make(map[uint8][]byte)}
+	if err := loaded.unmarshal(buf); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	got, ok := loaded.Tags[FixedTag]
+	if !ok {
+		t.Fatalf("tag %#x not found after round-trip; got tags: %v", FixedTag, loaded.Tags)
+	}
+
+	if string(got) != "hello world" {
+		t.Fatalf("tag value: got %q, want %q", got, "hello world")
+	}
+}
+
+func TestMarshalTagLayout(t *testing.T) {
+	adv := &ADV{Tags: make(map[uint8][]byte)}
+	adv.SetTagBytes(FixedTag, []byte("xyz"))
+
+	buf, err := adv.marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Tag header sits right after Magic1 (4 bytes): tag (1B) + 3B reserved + size (4B BE).
+	if got := buf[4]; got != FixedTag {
+		t.Fatalf("on-wire tag byte: got %#x, want %#x", got, FixedTag)
+	}
+
+	if got := binary.BigEndian.Uint32(buf[8:12]); got != 3 {
+		t.Fatalf("on-wire size: got %d, want 3", got)
+	}
+
+	if got := string(buf[12:15]); got != "xyz" {
+		t.Fatalf("on-wire value: got %q, want %q", got, "xyz")
+	}
+}
+
+func TestDiskRoundTrip(t *testing.T) {
+	f := newTestFile(t)
+
+	original := &ADV{Tags: make(map[uint8][]byte)}
+	original.SetTagBytes(FixedTag, []byte("disk round-trip"))
+
+	if err := original.WriteToDisk(f.Name()); err != nil {
+		t.Fatalf("WriteToDisk: %v", err)
+	}
+
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := NewADV(f)
+	if err != nil {
+		t.Fatalf("NewADV: %v", err)
+	}
+
+	got, ok := loaded.Tags[FixedTag]
+	if !ok {
+		t.Fatalf("tag %#x not found after disk round-trip; got tags: %v", FixedTag, loaded.Tags)
+	}
+
+	if string(got) != "disk round-trip" {
+		t.Fatalf("tag value: got %q, want %q", got, "disk round-trip")
+	}
+}
+
 func TestWriteToDiskWritesBothCopies(t *testing.T) {
 	f := newTestFile(t)
 
