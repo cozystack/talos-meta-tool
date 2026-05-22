@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
-	"encoding/binary"
 	"os"
 	"testing"
+
+	"github.com/siderolabs/go-adv/adv/talos"
 )
 
-// newTestFile creates a zeroed temp file of 2*Length bytes (two ADV blocks).
+// newTestFile creates a zeroed temp file of talos.Size bytes (two ADV blocks).
 func newTestFile(t *testing.T) *os.File {
 	t.Helper()
 
@@ -26,218 +27,134 @@ func newTestFile(t *testing.T) *os.File {
 		}
 	})
 
-	if err := f.Truncate(2 * Length); err != nil {
+	if err := f.Truncate(talos.Size); err != nil {
 		t.Fatal(err)
 	}
 
 	return f
 }
 
-func TestNewADVNilReader(t *testing.T) {
-	adv, err := NewADV(nil)
+func TestValidateYAMLValid(t *testing.T) {
+	out, err := validateYAML([]byte("key: value\nfoo: bar\n"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(adv.Tags) != 0 {
-		t.Fatalf("expected empty Tags, got %d entries", len(adv.Tags))
+	// Output must itself be valid and stable (idempotent).
+	out2, err := validateYAML(out)
+	if err != nil {
+		t.Fatalf("output is not valid YAML: %v", err)
+	}
+
+	if !bytes.Equal(out, out2) {
+		t.Fatalf("validateYAML not idempotent:\n first: %q\nsecond: %q", out, out2)
 	}
 }
 
-func TestNewADVEmptyFile(t *testing.T) {
+func TestValidateYAMLInvalid(t *testing.T) {
+	if _, err := validateYAML([]byte("key: [\ninvalid")); err == nil {
+		t.Fatal("expected error for invalid YAML, got nil")
+	}
+}
+
+func TestWriteConfigRoundTrip(t *testing.T) {
 	f := newTestFile(t)
 
-	// A zeroed file has no valid magic — NewADV should return an empty ADV, not an error.
-	adv, err := NewADV(f)
-	if err != nil {
-		t.Fatalf("unexpected error on zeroed file: %v", err)
-	}
+	payload := []byte("key: value\n")
 
-	if len(adv.Tags) != 0 {
-		t.Fatalf("expected empty Tags, got %d entries", len(adv.Tags))
-	}
-}
-
-func TestSetTagBytes(t *testing.T) {
-	adv := &ADV{Tags: make(map[uint8][]byte)}
-
-	val := []byte("hello")
-	if !adv.SetTagBytes(FixedTag, val) {
-		t.Fatal("SetTagBytes returned false unexpectedly")
-	}
-
-	got, ok := adv.Tags[FixedTag]
-	if !ok {
-		t.Fatal("tag not found in map after SetTagBytes")
-	}
-
-	if string(got) != string(val) {
-		t.Fatalf("got %q, want %q", got, val)
-	}
-}
-
-func TestSetTagBytesBoundary(t *testing.T) {
-	// SetTagBytes reserves 20 bytes of overhead in addition to the value,
-	// so the largest accepted value on an empty ADV is DataLength-20.
-	const maxAccepted = DataLength - 20
-
-	t.Run("largest accepted", func(t *testing.T) {
-		adv := &ADV{Tags: make(map[uint8][]byte)}
-		if !adv.SetTagBytes(FixedTag, make([]byte, maxAccepted)) {
-			t.Fatalf("SetTagBytes rejected the maximum accepted size %d", maxAccepted)
-		}
-	})
-
-	t.Run("smallest rejected", func(t *testing.T) {
-		adv := &ADV{Tags: make(map[uint8][]byte)}
-		if adv.SetTagBytes(FixedTag, make([]byte, maxAccepted+1)) {
-			t.Fatalf("SetTagBytes accepted size %d which exceeds the limit", maxAccepted+1)
-		}
-	})
-}
-
-func TestMarshalMagicBytes(t *testing.T) {
-	adv := &ADV{Tags: make(map[uint8][]byte)}
-	adv.SetTagBytes(FixedTag, []byte("test"))
-
-	buf, err := adv.marshal()
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	if len(buf) != Length {
-		t.Fatalf("marshal output length: got %d, want %d", len(buf), Length)
-	}
-
-	if got := binary.BigEndian.Uint32(buf[:4]); got != Magic1 {
-		t.Fatalf("Magic1: got %#x, want %#x", got, Magic1)
-	}
-
-	if got := binary.BigEndian.Uint32(buf[len(buf)-4:]); got != Magic2 {
-		t.Fatalf("Magic2: got %#x, want %#x", got, Magic2)
-	}
-}
-
-func TestRoundTripEmpty(t *testing.T) {
-	original := &ADV{Tags: make(map[uint8][]byte)}
-
-	buf, err := original.marshal()
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	loaded := &ADV{Tags: make(map[uint8][]byte)}
-	if err := loaded.unmarshal(buf); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if len(loaded.Tags) != 0 {
-		t.Fatalf("expected empty Tags after round-trip, got %d entries", len(loaded.Tags))
-	}
-}
-
-func TestRoundTripWithTags(t *testing.T) {
-	original := &ADV{Tags: make(map[uint8][]byte)}
-	original.SetTagBytes(FixedTag, []byte("hello world"))
-
-	buf, err := original.marshal()
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	loaded := &ADV{Tags: make(map[uint8][]byte)}
-	if err := loaded.unmarshal(buf); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	got, ok := loaded.Tags[FixedTag]
-	if !ok {
-		t.Fatalf("tag %#x not found after round-trip; got tags: %v", FixedTag, loaded.Tags)
-	}
-
-	if string(got) != "hello world" {
-		t.Fatalf("tag value: got %q, want %q", got, "hello world")
-	}
-}
-
-func TestMarshalTagLayout(t *testing.T) {
-	adv := &ADV{Tags: make(map[uint8][]byte)}
-	adv.SetTagBytes(FixedTag, []byte("xyz"))
-
-	buf, err := adv.marshal()
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	// Tag header sits right after Magic1 (4 bytes): tag (1B) + 3B reserved + size (4B BE).
-	if got := buf[4]; got != FixedTag {
-		t.Fatalf("on-wire tag byte: got %#x, want %#x", got, FixedTag)
-	}
-
-	if got := binary.BigEndian.Uint32(buf[8:12]); got != 3 {
-		t.Fatalf("on-wire size: got %d, want 3", got)
-	}
-
-	if got := string(buf[12:15]); got != "xyz" {
-		t.Fatalf("on-wire value: got %q, want %q", got, "xyz")
-	}
-}
-
-func TestDiskRoundTrip(t *testing.T) {
-	f := newTestFile(t)
-
-	original := &ADV{Tags: make(map[uint8][]byte)}
-	original.SetTagBytes(FixedTag, []byte("disk round-trip"))
-
-	if err := original.WriteToDisk(f.Name()); err != nil {
-		t.Fatalf("WriteToDisk: %v", err)
+	if err := writeConfig(f.Name(), payload); err != nil {
+		t.Fatalf("writeConfig: %v", err)
 	}
 
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
 
-	loaded, err := NewADV(f)
+	loaded, err := talos.NewADV(f)
 	if err != nil {
 		t.Fatalf("NewADV: %v", err)
 	}
 
-	got, ok := loaded.Tags[FixedTag]
+	got, ok := loaded.ReadTagBytes(FixedTag)
 	if !ok {
-		t.Fatalf("tag %#x not found after disk round-trip; got tags: %v", FixedTag, loaded.Tags)
+		t.Fatalf("tag %#x not found after round-trip", FixedTag)
 	}
 
-	if string(got) != "disk round-trip" {
-		t.Fatalf("tag value: got %q, want %q", got, "disk round-trip")
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("tag value: got %q, want %q", got, payload)
 	}
 }
 
-func TestWriteToDiskWritesBothCopies(t *testing.T) {
+func TestWriteConfigPreservesExistingTags(t *testing.T) {
 	f := newTestFile(t)
 
-	adv := &ADV{Tags: make(map[uint8][]byte)}
-	adv.SetTagBytes(FixedTag, []byte("test"))
-
-	if err := adv.WriteToDisk(f.Name()); err != nil {
-		t.Fatalf("WriteToDisk: %v", err)
+	// Write an initial tag using a different tag value.
+	adv, err := talos.NewADV(nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	buf1 := make([]byte, Length)
-	buf2 := make([]byte, Length)
-
-	if _, err := f.ReadAt(buf1, 0); err != nil {
+	if !adv.SetTagBytes(0x01, []byte("existing")) {
+		t.Fatal("SetTagBytes 0x01 failed")
+	}
+	data, err := adv.Bytes()
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := f.ReadAt(buf2, Length); err != nil {
+	if _, err := f.WriteAt(data, 0); err != nil {
 		t.Fatal(err)
 	}
 
-	if !bytes.Equal(buf1, buf2) {
-		t.Error("second copy does not match first copy")
+	// writeConfig should preserve tag 0x01 while adding FixedTag.
+	if err := writeConfig(f.Name(), []byte("key: value\n")); err != nil {
+		t.Fatalf("writeConfig: %v", err)
 	}
 
-	if got := binary.BigEndian.Uint32(buf1[:4]); got != Magic1 {
-		t.Fatalf("Magic1: got %#x, want %#x", got, Magic1)
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := talos.NewADV(f)
+	if err != nil {
+		t.Fatalf("NewADV: %v", err)
+	}
+
+	if _, ok := loaded.ReadTagBytes(0x01); !ok {
+		t.Error("pre-existing tag 0x01 was lost after writeConfig")
+	}
+
+	if _, ok := loaded.ReadTagBytes(FixedTag); !ok {
+		t.Errorf("tag %#x not found after writeConfig", FixedTag)
+	}
+}
+
+func TestWriteConfigOversizedPayload(t *testing.T) {
+	f := newTestFile(t)
+
+	if err := writeConfig(f.Name(), make([]byte, talos.DataLength+1)); err == nil {
+		t.Fatal("expected error for oversized payload, got nil")
+	}
+}
+
+func TestWriteConfigReadOnlyDevice(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("read-only permission check is ineffective as root")
+	}
+
+	f := newTestFile(t)
+
+	if err := os.Chmod(f.Name(), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(f.Name(), 0o644) }) //nolint:errcheck
+
+	if err := writeConfig(f.Name(), []byte("key: value\n")); err == nil {
+		t.Fatal("expected error writing to read-only device, got nil")
+	}
+}
+
+func TestWriteConfigBadDevice(t *testing.T) {
+	if err := writeConfig("/nonexistent/path/device", []byte("key: value\n")); err == nil {
+		t.Fatal("expected error for non-existent device, got nil")
 	}
 }
