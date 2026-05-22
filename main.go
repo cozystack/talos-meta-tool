@@ -1,156 +1,63 @@
 package main
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/binary"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
-	"sync"
 
+	"github.com/siderolabs/go-adv/adv/talos"
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	FixedTag   = 0xA         // Fixed tag
-	Magic1     = 0x5a4b3c2d  // Magic value 1
-	Magic2     = 0xa5b4c3d2  // Magic value 2
-	Length     = 256 * 1024  // ADV size in bytes
-	DataLength = Length - 40 // Available space for data
-)
+const FixedTag = 0xA // Fixed tag
 
-type ADV struct {
-	Tags map[uint8][]byte
-	mu   sync.Mutex
-}
-
-// NewADV initializes ADV. If the device does not contain a valid Magic1, an empty ADV is returned.
-func NewADV(r io.Reader) (*ADV, error) {
-	a := &ADV{
-		Tags: make(map[uint8][]byte),
-	}
-
-	if r == nil {
-		return a, nil
-	}
-
-	buf := make([]byte, Length)
-	_, err := io.ReadFull(r, buf)
-	if err != nil {
+func validateYAML(data []byte) ([]byte, error) {
+	var config interface{}
+	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
-
-	if err = a.unmarshal(buf); err != nil {
-		log.Printf("ADV does not contain a valid Magic1: initializing a new ADV.")
-		return &ADV{Tags: make(map[uint8][]byte)}, nil
-	}
-
-	return a, nil
+	return yaml.Marshal(config)
 }
 
-// unmarshal loads data from the buffer into the ADV structure
-func (a *ADV) unmarshal(buf []byte) error {
-	magic1 := binary.BigEndian.Uint32(buf[:4])
-	if magic1 != Magic1 {
-		return fmt.Errorf("adv: incorrect magic1 value: %x", magic1)
-	}
-
-	magic2 := binary.BigEndian.Uint32(buf[len(buf)-4:])
-	if magic2 != Magic2 {
-		return fmt.Errorf("adv: incorrect magic2 value: %x", magic2)
-	}
-
-	checksum := append([]byte(nil), buf[len(buf)-36:len(buf)-4]...)
-	copy(buf[len(buf)-36:len(buf)-4], make([]byte, 32))
-
-	hash := sha256.Sum256(buf)
-	if !bytes.Equal(checksum, hash[:]) {
-		return fmt.Errorf("adv: invalid checksum")
-	}
-
-	data := buf[4 : len(buf)-36]
-	for len(data) >= 8 {
-		tag := data[0]
-		if tag == 0 {
-			break
+func writeConfig(devicePath string, configData []byte) (err error) {
+	var adv *talos.ADV
+	f, err := os.Open(devicePath)
+	if err == nil {
+		var loadErr error
+		adv, loadErr = talos.NewADV(f)
+		if cerr := f.Close(); cerr != nil && loadErr == nil {
+			loadErr = cerr
 		}
-
-		size := binary.BigEndian.Uint32(data[4:8])
-		if len(data) < int(size)+8 {
-			return fmt.Errorf("adv: value exceeds buffer limits")
+		if adv == nil {
+			// nil means an I/O error; non-nil with error means empty/corrupt device
+			return fmt.Errorf("loading ADV: %w", loadErr)
 		}
-
-		value := data[8 : 8+size]
-		a.Tags[tag] = value
-		data = data[8+size:]
+	} else {
+		adv, _ = talos.NewADV(nil)
 	}
 
-	return nil
-}
-
-// SetTagBytes sets the tag value in byte format
-func (a *ADV) SetTagBytes(tag uint8, val []byte) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	size := 20 // magic and checksum
-	for _, v := range a.Tags {
-		size += len(v) + 8
+	if !adv.SetTagBytes(FixedTag, configData) {
+		return fmt.Errorf("not enough space to write configuration")
 	}
 
-	if len(val)+size > DataLength {
-		return false
-	}
-
-	a.Tags[tag] = val
-	return true
-}
-
-// marshal converts ADV data into a byte array
-func (a *ADV) marshal() ([]byte, error) {
-	buf := make([]byte, Length)
-	binary.BigEndian.PutUint32(buf[0:4], Magic1)
-	binary.BigEndian.PutUint32(buf[len(buf)-4:], Magic2)
-
-	data := buf[4 : len(buf)-36]
-	for tag, value := range a.Tags {
-		data[0] = tag
-		binary.BigEndian.PutUint32(data[4:8], uint32(len(value)))
-		copy(data[8:8+len(value)], value)
-		data = data[8+len(value):]
-	}
-
-	hash := sha256.Sum256(buf)
-	copy(buf[len(buf)-36:len(buf)-4], hash[:])
-	return buf, nil
-}
-
-// WriteToDisk writes ADV data to disk
-func (a *ADV) WriteToDisk(devicePath string) (err error) {
-	serialized, err := a.marshal()
+	data, err := adv.Bytes()
 	if err != nil {
-		return err
+		return fmt.Errorf("serializing ADV: %w", err)
 	}
 
-	f, err := os.OpenFile(devicePath, os.O_RDWR, 0)
+	device, err := os.OpenFile(devicePath, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("opening device for writing: %w", err)
 	}
 	defer func() {
-		if cerr := f.Close(); cerr != nil && err == nil {
+		if cerr := device.Close(); cerr != nil && err == nil {
 			err = cerr
 		}
 	}()
 
-	if _, err := f.WriteAt(serialized, 0); err != nil {
-		return err
-	}
-
-	if _, err := f.WriteAt(serialized, Length); err != nil {
-		return err
+	if _, err := device.WriteAt(data, 0); err != nil {
+		return fmt.Errorf("writing data to disk: %w", err)
 	}
 
 	return nil
@@ -173,43 +80,13 @@ func main() {
 		log.Fatalf("Error reading configuration file: %v", err)
 	}
 
-	// YAML validation
-	var config interface{}
-	if err := yaml.Unmarshal(configData, &config); err != nil {
+	validatedConfigData, err := validateYAML(configData)
+	if err != nil {
 		log.Fatalf("Invalid YAML configuration: %v", err)
 	}
 
-	// Marshaling back to ensure correct format
-	validatedConfigData, err := yaml.Marshal(config)
-	if err != nil {
-		log.Fatalf("Error marshaling YAML configuration: %v", err)
-	}
-
-	// Creating or loading an existing ADV
-	var adv *ADV
-	f, err := os.Open(*devicePath)
-	if err == nil {
-		defer func() {
-			_ = f.Close()
-		}()
-		adv, err = NewADV(f)
-		if err != nil {
-			log.Fatalf("Error loading ADV: %v", err)
-		}
-	} else {
-		adv = &ADV{
-			Tags: make(map[uint8][]byte),
-		}
-	}
-
-	// Writing validated configuration into ADV
-	if !adv.SetTagBytes(FixedTag, validatedConfigData) {
-		log.Fatalf("Error: not enough space to write configuration")
-	}
-
-	// Writing data to disk
-	if err := adv.WriteToDisk(*devicePath); err != nil {
-		log.Fatalf("Error writing data to disk: %v", err)
+	if err := writeConfig(*devicePath, validatedConfigData); err != nil {
+		log.Fatalf("Error: %v", err)
 	}
 
 	fmt.Println("Configuration successfully validated and written to META partition.")
