@@ -1,16 +1,69 @@
+//go:build linux
+
 package main
 
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 
 	"github.com/siderolabs/go-adv/adv/talos"
+	"github.com/siderolabs/go-blockdevice/v2/block"
+	"github.com/siderolabs/go-blockdevice/v2/partitioning/gpt"
 	"gopkg.in/yaml.v3"
 )
 
 const FixedTag = 0xA // Fixed tag
+
+// partAt wraps an *os.File and translates offset-0 reads/writes to a fixed
+// byte offset within the file — used to address a partition inside a disk.
+type partAt struct {
+	file   *os.File
+	offset int64
+}
+
+func (p *partAt) ReadAt(buf []byte, off int64) (int, error) {
+	return p.file.ReadAt(buf, p.offset+off)
+}
+
+func (p *partAt) WriteAt(buf []byte, off int64) (int, error) {
+	return p.file.WriteAt(buf, p.offset+off)
+}
+
+// openGPTDevice returns a gpt.Device for f. It uses ioctl for real block
+// devices and falls back to stat for regular files (e.g. in tests).
+func openGPTDevice(f *os.File) (gpt.Device, error) {
+	if dev, err := gpt.DeviceFromBlockDevice(block.NewFromFile(f)); err == nil {
+		return dev, nil
+	}
+	return gpt.DeviceFromFile(f)
+}
+
+// findMetaPartition reads the GPT table from f and returns a ReadWriteAt
+// scoped to the partition named "META".
+func findMetaPartition(f *os.File) (interface{ io.ReaderAt; io.WriterAt }, error) {
+	gptdev, err := openGPTDevice(f)
+	if err != nil {
+		return nil, fmt.Errorf("opening GPT device: %w", err)
+	}
+
+	table, err := gpt.Read(gptdev)
+	if err != nil {
+		return nil, fmt.Errorf("reading GPT table: %w", err)
+	}
+
+	sectorSize := int64(gptdev.GetSectorSize())
+
+	for _, p := range table.Partitions() {
+		if p != nil && p.Name == "META" {
+			return &partAt{file: f, offset: int64(p.FirstLBA) * sectorSize}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("META partition not found")
+}
 
 func validateYAML(data []byte) ([]byte, error) {
 	var config interface{}
@@ -20,21 +73,11 @@ func validateYAML(data []byte) ([]byte, error) {
 	return yaml.Marshal(config)
 }
 
-func writeConfig(devicePath string, configData []byte) (err error) {
-	var adv *talos.ADV
-	f, err := os.Open(devicePath)
-	if err == nil {
-		var loadErr error
-		adv, loadErr = talos.NewADV(f)
-		if cerr := f.Close(); cerr != nil && loadErr == nil {
-			loadErr = cerr
-		}
-		if adv == nil {
-			// nil means an I/O error; non-nil with error means empty/corrupt device
-			return fmt.Errorf("loading ADV: %w", loadErr)
-		}
-	} else {
-		adv, _ = talos.NewADV(nil)
+func writeConfig(dev interface{ io.ReaderAt; io.WriterAt }, configData []byte) error {
+	adv, loadErr := talos.NewADV(io.NewSectionReader(dev, 0, int64(talos.Size)))
+	if adv == nil {
+		// nil means an I/O error; non-nil with error means empty/corrupt device
+		return fmt.Errorf("loading ADV: %w", loadErr)
 	}
 
 	if !adv.SetTagBytes(FixedTag, configData) {
@@ -46,17 +89,7 @@ func writeConfig(devicePath string, configData []byte) (err error) {
 		return fmt.Errorf("serializing ADV: %w", err)
 	}
 
-	device, err := os.OpenFile(devicePath, os.O_RDWR, 0)
-	if err != nil {
-		return fmt.Errorf("opening device for writing: %w", err)
-	}
-	defer func() {
-		if cerr := device.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
-	}()
-
-	if _, err := device.WriteAt(data, 0); err != nil {
+	if _, err = dev.WriteAt(data, 0); err != nil {
 		return fmt.Errorf("writing data to disk: %w", err)
 	}
 
@@ -64,17 +97,15 @@ func writeConfig(devicePath string, configData []byte) (err error) {
 }
 
 func main() {
-	// Command-line arguments
-	devicePath := flag.String("device", "", "Path to the META device (e.g., /dev/sda4)")
+	devicePath := flag.String("device", "", "Path to the disk device (e.g., /dev/sda)")
 	configPath := flag.String("config", "", "Path to the configuration file (e.g., config.yaml)")
 	flag.Parse()
 
 	if *devicePath == "" || *configPath == "" {
-		fmt.Println("Usage: go run main.go -device <META-device> -config <path to config file>")
+		fmt.Println("Usage: talos-meta-tool -device <disk-device> -config <file>")
 		return
 	}
 
-	// Reading configuration from file
 	configData, err := os.ReadFile(*configPath)
 	if err != nil {
 		log.Fatalf("Error reading configuration file: %v", err)
@@ -85,8 +116,23 @@ func main() {
 		log.Fatalf("Invalid YAML configuration: %v", err)
 	}
 
-	if err := writeConfig(*devicePath, validatedConfigData); err != nil {
+	device, err := os.OpenFile(*devicePath, os.O_RDWR, 0)
+	if err != nil {
+		log.Fatalf("Error opening device: %v", err)
+	}
+	defer device.Close() //nolint:errcheck
+
+	meta, err := findMetaPartition(device)
+	if err != nil {
 		log.Fatalf("Error: %v", err)
+	}
+
+	if err := writeConfig(meta, validatedConfigData); err != nil {
+		log.Fatalf("Error: %v", err)
+	}
+
+	if err := device.Sync(); err != nil {
+		log.Fatalf("Error syncing device: %v", err)
 	}
 
 	fmt.Println("Configuration successfully validated and written to META partition.")
