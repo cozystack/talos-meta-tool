@@ -13,7 +13,7 @@ import (
 // configuration (the format Talos reads from META key 0x0a), rejecting
 // unknown fields, malformed values and extra YAML documents.
 //
-// See https://docs.siderolabs.com/talos/latest/networking/metal-network-configuration.
+// See https://docs.siderolabs.com/talos/v1.13/platform-specific-installations/bare-metal-platforms/metal-network-configuration.
 func validateConfig(data []byte) error {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
