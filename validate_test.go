@@ -6,7 +6,7 @@ import (
 )
 
 // validNetworkConfig follows the metal network configuration format,
-// see https://docs.siderolabs.com/talos/latest/networking/metal-network-configuration.
+// see https://docs.siderolabs.com/talos/v1.13/platform-specific-installations/bare-metal-platforms/metal-network-configuration.
 const validNetworkConfig = `addresses:
   - address: 147.75.61.43/31
     linkName: bond0
