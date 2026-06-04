@@ -113,29 +113,6 @@ func (errDevice) WriteAt(p []byte, off int64) (int, error) {
 	return 0, errors.New("device error")
 }
 
-func TestValidateYAMLValid(t *testing.T) {
-	out, err := validateYAML([]byte("key: value\nfoo: bar\n"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Output must itself be valid and stable (idempotent).
-	out2, err := validateYAML(out)
-	if err != nil {
-		t.Fatalf("output is not valid YAML: %v", err)
-	}
-
-	if !bytes.Equal(out, out2) {
-		t.Fatalf("validateYAML not idempotent:\n first: %q\nsecond: %q", out, out2)
-	}
-}
-
-func TestValidateYAMLInvalid(t *testing.T) {
-	if _, err := validateYAML([]byte("key: [\ninvalid")); err == nil {
-		t.Fatal("expected error for invalid YAML, got nil")
-	}
-}
-
 func TestWriteConfigRoundTrip(t *testing.T) {
 	f := newTestFile(t)
 

@@ -12,7 +12,6 @@ import (
 	"github.com/siderolabs/go-adv/adv/talos"
 	"github.com/siderolabs/go-blockdevice/v2/block"
 	"github.com/siderolabs/go-blockdevice/v2/partitioning/gpt"
-	"gopkg.in/yaml.v3"
 )
 
 const FixedTag = 0xA // Fixed tag
@@ -65,14 +64,6 @@ func findMetaPartition(f *os.File) (interface{ io.ReaderAt; io.WriterAt }, error
 	return nil, fmt.Errorf("META partition not found")
 }
 
-func validateYAML(data []byte) ([]byte, error) {
-	var config interface{}
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, err
-	}
-	return yaml.Marshal(config)
-}
-
 func writeConfig(dev interface{ io.ReaderAt; io.WriterAt }, configData []byte) error {
 	adv, loadErr := talos.NewADV(io.NewSectionReader(dev, 0, int64(talos.Size)))
 	if adv == nil {
@@ -111,9 +102,8 @@ func main() {
 		log.Fatalf("Error reading configuration file: %v", err)
 	}
 
-	validatedConfigData, err := validateYAML(configData)
-	if err != nil {
-		log.Fatalf("Invalid YAML configuration: %v", err)
+	if err := validateConfig(configData); err != nil {
+		log.Fatalf("Invalid network configuration: %v", err)
 	}
 
 	device, err := os.OpenFile(*devicePath, os.O_RDWR, 0)
@@ -127,7 +117,7 @@ func main() {
 		log.Fatalf("Error: %v", err)
 	}
 
-	if err := writeConfig(meta, validatedConfigData); err != nil {
+	if err := writeConfig(meta, configData); err != nil {
 		log.Fatalf("Error: %v", err)
 	}
 
