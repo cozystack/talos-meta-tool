@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
@@ -28,8 +29,11 @@ func validateConfig(data []byte) error {
 		return err
 	}
 
-	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+	switch err := dec.Decode(new(any)); {
+	case err == nil:
 		return errors.New("unexpected extra YAML document")
+	case !errors.Is(err, io.EOF):
+		return fmt.Errorf("unexpected extra YAML document: %w", err)
 	}
 
 	return nil

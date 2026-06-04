@@ -83,6 +83,7 @@ func TestValidateConfigInvalid(t *testing.T) {
 		{"bad enum value", "addresses:\n  - address: 1.2.3.4/32\n    family: inet5\n"},
 		{"bad IP", "externalIPs:\n  - not-an-ip\n"},
 		{"extra document", validNetworkConfig + "---\nexternalIPs: []\n"},
+		{"malformed extra document", validNetworkConfig + "---\nkey: [\ninvalid"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := validateConfig([]byte(tt.config)); err == nil {
@@ -100,5 +101,17 @@ func TestValidateConfigUnknownFieldError(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "foo") {
 		t.Fatalf("error should mention the unknown field, got: %v", err)
+	}
+}
+
+func TestValidateConfigMalformedExtraDocumentError(t *testing.T) {
+	err := validateConfig([]byte(validNetworkConfig + "---\nkey: [\ninvalid"))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// The underlying parser error must be preserved for diagnostics.
+	if !strings.Contains(err.Error(), "yaml") {
+		t.Fatalf("error should preserve the parser error, got: %v", err)
 	}
 }
