@@ -90,6 +90,7 @@ func writeConfig(dev interface{ io.ReaderAt; io.WriterAt }, configData []byte) e
 func main() {
 	devicePath := flag.String("device", "", "Path to the disk device (e.g., /dev/sda)")
 	configPath := flag.String("config", "", "Path to the configuration file (e.g., config.yaml)")
+	skipValidation := flag.Bool("skip-validation", false, "Skip schema validation of the configuration file")
 	flag.Parse()
 
 	if *devicePath == "" || *configPath == "" {
@@ -102,8 +103,10 @@ func main() {
 		log.Fatalf("Error reading configuration file: %v", err)
 	}
 
-	if err := validateConfig(configData); err != nil {
-		log.Fatalf("Invalid network configuration: %v", err)
+	if !*skipValidation {
+		if err := validateConfig(configData); err != nil {
+			log.Fatalf("Invalid network configuration: %v", err)
+		}
 	}
 
 	device, err := os.OpenFile(*devicePath, os.O_RDWR, 0)
