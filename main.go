@@ -3,11 +3,13 @@
 package main
 
 import (
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/siderolabs/go-adv/adv/talos"
 	"github.com/siderolabs/go-blockdevice/v2/block"
@@ -87,26 +89,57 @@ func writeConfig(dev interface{ io.ReaderAt; io.WriterAt }, configData []byte) e
 	return nil
 }
 
+func loadConfig(path, envVar string, b64 bool) ([]byte, error) {
+	if envVar != "" {
+		val, ok := os.LookupEnv(envVar)
+		if !ok {
+			return nil, fmt.Errorf("environment variable %q is not set", envVar)
+		}
+		if b64 {
+			stripped := strings.Map(func(r rune) rune {
+				if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+					return -1
+				}
+				return r
+			}, val)
+			data, err := base64.StdEncoding.DecodeString(stripped)
+			if err != nil {
+				return nil, fmt.Errorf("base64 decoding %q: %w", envVar, err)
+			}
+			return data, nil
+		}
+		return []byte(val), nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading configuration file: %w", err)
+	}
+	return data, nil
+}
+
 func main() {
 	devicePath := flag.String("device", "", "Path to the disk device (e.g., /dev/sda)")
 	configPath := flag.String("config", "", "Path to the configuration file (e.g., config.yaml)")
+	configEnv := flag.String("config-env", "", "Name of the environment variable containing the configuration")
+	configEnvBase64 := flag.Bool("config-env-base64", false, "Decode the -config-env value as base64 before use")
 	skipValidation := flag.Bool("skip-validation", false, "Skip schema validation of the configuration file")
 	flag.Parse()
 
-	if *devicePath == "" || *configPath == "" {
-		fmt.Println("Usage: talos-meta-tool -device <disk-device> -config <file>")
-		return
+	if *devicePath == "" {
+		fmt.Fprintln(os.Stderr, "Usage: talos-meta-tool -device <disk-device> (-config <file> | -config-env <VAR> [-config-env-base64])")
+		os.Exit(1)
 	}
-
-	configData, err := os.ReadFile(*configPath)
-	if err != nil {
-		log.Fatalf("Error reading configuration file: %v", err)
+	if *configPath == "" && *configEnv == "" {
+		fmt.Fprintln(os.Stderr, "Usage: talos-meta-tool -device <disk-device> (-config <file> | -config-env <VAR> [-config-env-base64])")
+		os.Exit(1)
 	}
-
-	if !*skipValidation {
-		if err := validateConfig(configData); err != nil {
-			log.Fatalf("Invalid network configuration: %v", err)
-		}
+	if *configPath != "" && *configEnv != "" {
+		fmt.Fprintln(os.Stderr, "Error: -config and -config-env are mutually exclusive")
+		os.Exit(1)
+	}
+	if *configEnvBase64 && *configEnv == "" {
+		fmt.Fprintln(os.Stderr, "Error: -config-env-base64 requires -config-env")
+		os.Exit(1)
 	}
 
 	device, err := os.OpenFile(*devicePath, os.O_RDWR, 0)
@@ -118,6 +151,17 @@ func main() {
 	meta, err := findMetaPartition(device)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
+	}
+
+	configData, err := loadConfig(*configPath, *configEnv, *configEnvBase64)
+	if err != nil {
+		log.Fatalf("loading configuration: %v", err)
+	}
+
+	if !*skipValidation {
+		if err := validateConfig(configData); err != nil {
+			log.Fatalf("Invalid network configuration: %v", err)
+		}
 	}
 
 	if err := writeConfig(meta, configData); err != nil {

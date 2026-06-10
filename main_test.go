@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -269,6 +270,89 @@ func TestFindMetaPartitionMissing(t *testing.T) {
 
 	if _, err := findMetaPartition(f); err == nil {
 		t.Fatal("expected error when META partition is absent, got nil")
+	}
+}
+
+func TestLoadConfigFile(t *testing.T) {
+	f, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(f.Name()) }) //nolint:errcheck
+
+	content := []byte("key: value\n")
+	if _, err := f.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadConfig(f.Name(), "", false)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("got %q, want %q", got, content)
+	}
+}
+
+func TestLoadConfigFileMissing(t *testing.T) {
+	if _, err := loadConfig("/nonexistent/config.yaml", "", false); err == nil {
+		t.Fatal("expected error for missing file, got nil")
+	}
+}
+
+func TestLoadConfigEnv(t *testing.T) {
+	content := "key: value\n"
+	t.Setenv("TEST_META_CONFIG", content)
+
+	got, err := loadConfig("", "TEST_META_CONFIG", false)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("got %q, want %q", got, content)
+	}
+}
+
+func TestLoadConfigEnvNotSet(t *testing.T) {
+	if _, err := loadConfig("", "TEST_META_CONFIG_UNSET_XYZ", false); err == nil {
+		t.Fatal("expected error for unset env var, got nil")
+	}
+}
+
+func TestLoadConfigEnvBase64(t *testing.T) {
+	content := []byte("key: value\n")
+	encoded := base64.StdEncoding.EncodeToString(content)
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"no whitespace", encoded},
+		{"trailing newline", encoded + "\n"},
+		{"embedded newlines", encoded[:len(encoded)/2] + "\n" + encoded[len(encoded)/2:]},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TEST_META_CONFIG_B64", tc.input)
+			got, err := loadConfig("", "TEST_META_CONFIG_B64", true)
+			if err != nil {
+				t.Fatalf("loadConfig: %v", err)
+			}
+			if !bytes.Equal(got, content) {
+				t.Fatalf("got %q, want %q", got, content)
+			}
+		})
+	}
+}
+
+func TestLoadConfigEnvBase64Invalid(t *testing.T) {
+	t.Setenv("TEST_META_CONFIG_B64", "not-valid-base64!!!")
+	if _, err := loadConfig("", "TEST_META_CONFIG_B64", true); err == nil {
+		t.Fatal("expected error for invalid base64, got nil")
 	}
 }
 
