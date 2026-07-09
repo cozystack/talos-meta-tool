@@ -1,4 +1,4 @@
-# Talos metadata writer tool
+# Talos metadata tool
 
 Tool for reading and writing network metadata in the Talos META partition.
 

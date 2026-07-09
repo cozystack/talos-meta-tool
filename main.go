@@ -89,9 +89,9 @@ func writeConfig(dev interface{ io.ReaderAt; io.WriterAt }, configData []byte) e
 	return nil
 }
 
-func readConfig(dev interface{ io.ReaderAt }) ([]byte, error) {
+func readConfig(dev io.ReaderAt) ([]byte, error) {
 	adv, err := talos.NewADV(io.NewSectionReader(dev, 0, int64(talos.Size)))
-	if adv == nil {
+	if err != nil {
 		return nil, fmt.Errorf("loading ADV: %w", err)
 	}
 	data, ok := adv.ReadTagBytes(FixedTag)
@@ -142,8 +142,29 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Usage: talos-meta-tool -device <disk-device> (-read | -config <file> | -config-env <VAR> [-config-env-base64])")
 		os.Exit(1)
 	}
+	if !*read && *configPath == "" && *configEnv == "" {
+		fmt.Fprintln(os.Stderr, "Usage: talos-meta-tool -device <disk-device> (-read | -config <file> | -config-env <VAR> [-config-env-base64])")
+		os.Exit(1)
+	}
+	if *read && (*configPath != "" || *configEnv != "") {
+		fmt.Fprintln(os.Stderr, "Error: -read is mutually exclusive with -config and -config-env")
+		os.Exit(1)
+	}
+	if *configPath != "" && *configEnv != "" {
+		fmt.Fprintln(os.Stderr, "Error: -config and -config-env are mutually exclusive")
+		os.Exit(1)
+	}
+	if *configEnvBase64 && *configEnv == "" {
+		fmt.Fprintln(os.Stderr, "Error: -config-env-base64 requires -config-env")
+		os.Exit(1)
+	}
 
-	device, err := os.OpenFile(*devicePath, os.O_RDWR, 0)
+	openMode := os.O_RDWR
+	if *read {
+		openMode = os.O_RDONLY
+	}
+
+	device, err := os.OpenFile(*devicePath, openMode, 0)
 	if err != nil {
 		log.Fatalf("Error opening device: %v", err)
 	}
@@ -161,19 +182,6 @@ func main() {
 		}
 		fmt.Print(string(data))
 		return
-	}
-
-	if *configPath == "" && *configEnv == "" {
-		fmt.Fprintln(os.Stderr, "Usage: talos-meta-tool -device <disk-device> (-read | -config <file> | -config-env <VAR> [-config-env-base64])")
-		os.Exit(1)
-	}
-	if *configPath != "" && *configEnv != "" {
-		fmt.Fprintln(os.Stderr, "Error: -config and -config-env are mutually exclusive")
-		os.Exit(1)
-	}
-	if *configEnvBase64 && *configEnv == "" {
-		fmt.Fprintln(os.Stderr, "Error: -config-env-base64 requires -config-env")
-		os.Exit(1)
 	}
 
 	configData, err := loadConfig(*configPath, *configEnv, *configEnvBase64)
