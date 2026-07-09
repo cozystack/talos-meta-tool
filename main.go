@@ -89,6 +89,18 @@ func writeConfig(dev interface{ io.ReaderAt; io.WriterAt }, configData []byte) e
 	return nil
 }
 
+func readConfig(dev interface{ io.ReaderAt }) ([]byte, error) {
+	adv, err := talos.NewADV(io.NewSectionReader(dev, 0, int64(talos.Size)))
+	if adv == nil {
+		return nil, fmt.Errorf("loading ADV: %w", err)
+	}
+	data, ok := adv.ReadTagBytes(FixedTag)
+	if !ok {
+		return nil, fmt.Errorf("tag %#x not found", FixedTag)
+	}
+	return data, nil
+}
+
 func loadConfig(path, envVar string, b64 bool) ([]byte, error) {
 	if envVar != "" {
 		val, ok := os.LookupEnv(envVar)
@@ -119,6 +131,7 @@ func loadConfig(path, envVar string, b64 bool) ([]byte, error) {
 
 func main() {
 	devicePath := flag.String("device", "", "Path to the disk device (e.g., /dev/sda)")
+	read := flag.Bool("read", false, "Read and print the current configuration from the META partition")
 	configPath := flag.String("config", "", "Path to the configuration file (e.g., config.yaml)")
 	configEnv := flag.String("config-env", "", "Name of the environment variable containing the configuration")
 	configEnvBase64 := flag.Bool("config-env-base64", false, "Decode the -config-env value as base64 before use")
@@ -126,19 +139,7 @@ func main() {
 	flag.Parse()
 
 	if *devicePath == "" {
-		fmt.Fprintln(os.Stderr, "Usage: talos-meta-tool -device <disk-device> (-config <file> | -config-env <VAR> [-config-env-base64])")
-		os.Exit(1)
-	}
-	if *configPath == "" && *configEnv == "" {
-		fmt.Fprintln(os.Stderr, "Usage: talos-meta-tool -device <disk-device> (-config <file> | -config-env <VAR> [-config-env-base64])")
-		os.Exit(1)
-	}
-	if *configPath != "" && *configEnv != "" {
-		fmt.Fprintln(os.Stderr, "Error: -config and -config-env are mutually exclusive")
-		os.Exit(1)
-	}
-	if *configEnvBase64 && *configEnv == "" {
-		fmt.Fprintln(os.Stderr, "Error: -config-env-base64 requires -config-env")
+		fmt.Fprintln(os.Stderr, "Usage: talos-meta-tool -device <disk-device> (-read | -config <file> | -config-env <VAR> [-config-env-base64])")
 		os.Exit(1)
 	}
 
@@ -151,6 +152,28 @@ func main() {
 	meta, err := findMetaPartition(device)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
+	}
+
+	if *read {
+		data, err := readConfig(meta)
+		if err != nil {
+			log.Fatalf("Error reading config: %v", err)
+		}
+		fmt.Print(string(data))
+		return
+	}
+
+	if *configPath == "" && *configEnv == "" {
+		fmt.Fprintln(os.Stderr, "Usage: talos-meta-tool -device <disk-device> (-read | -config <file> | -config-env <VAR> [-config-env-base64])")
+		os.Exit(1)
+	}
+	if *configPath != "" && *configEnv != "" {
+		fmt.Fprintln(os.Stderr, "Error: -config and -config-env are mutually exclusive")
+		os.Exit(1)
+	}
+	if *configEnvBase64 && *configEnv == "" {
+		fmt.Fprintln(os.Stderr, "Error: -config-env-base64 requires -config-env")
+		os.Exit(1)
 	}
 
 	configData, err := loadConfig(*configPath, *configEnv, *configEnvBase64)

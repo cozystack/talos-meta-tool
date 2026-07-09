@@ -1,6 +1,6 @@
 # Talos metadata writer tool
 
-Tool for writing network metadata in the Talos META partition.
+Tool for reading and writing network metadata in the Talos META partition.
 
 Doc: https://docs.siderolabs.com/talos/v1.13/platform-specific-installations/bare-metal-platforms/metal-network-configuration
 
@@ -12,6 +12,9 @@ GOOS=linux GOARCH=amd64 go build -o talos-meta-tool .
 
 Usage:
 ```bash
+# read current config
+talos-meta-tool -device /dev/sda -read
+
 # write config from file
 talos-meta-tool -device /dev/sda -config config.yaml
 
