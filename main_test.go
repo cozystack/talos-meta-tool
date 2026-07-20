@@ -390,3 +390,36 @@ func TestWriteConfigFullDisk(t *testing.T) {
 		t.Fatalf("tag value: got %q, want %q", got, payload)
 	}
 }
+
+func TestReadConfigRoundTrip(t *testing.T) {
+	f := newTestFile(t)
+
+	payload := []byte("key: value\n")
+
+	if err := writeConfig(f, payload); err != nil {
+		t.Fatalf("writeConfig: %v", err)
+	}
+
+	got, err := readConfig(f)
+	if err != nil {
+		t.Fatalf("readConfig: %v", err)
+	}
+
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("readConfig: got %q, want %q", got, payload)
+	}
+}
+
+func TestReadConfigEmpty(t *testing.T) {
+	f := newTestFile(t)
+
+	if _, err := readConfig(f); err == nil {
+		t.Fatal("expected error reading from empty ADV, got nil")
+	}
+}
+
+func TestReadConfigBadDevice(t *testing.T) {
+	if _, err := readConfig(errDevice{}); err == nil {
+		t.Fatal("expected error for bad device, got nil")
+	}
+}
